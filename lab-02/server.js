@@ -7,16 +7,21 @@
  * Description:
  * Express server connected to SQLite database (goodreads.db)
  * exposing full CRUD endpoints for the 'book' resource.
+ * Supports local execution and serverless hosting (e.g. Vercel).
  */
 
 const express = require('express');
+const fs = require('fs');
 const path = require('path');
 const { open } = require('sqlite');
 const sqlite3 = require('sqlite3');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const dbPath = path.join(__dirname, 'goodreads.db');
+
+// Resolve DB path (copy to /tmp on Vercel to allow write operations on serverless)
+const localDbPath = path.join(__dirname, 'goodreads.db');
+let dbPath = localDbPath;
 
 // Middleware to parse incoming JSON request bodies
 app.use(express.json());
@@ -33,31 +38,101 @@ app.use((req, res, next) => {
 });
 
 let db = null;
+let dbPromise = null;
+
+/**
+ * Safe database connection resolver
+ * Guarantees the database is open before handling any query.
+ * Auto-seeds /tmp/goodreads.db on serverless environments if needed.
+ */
+const getDB = async () => {
+  if (db) return db;
+  if (!dbPromise) {
+    dbPromise = (async () => {
+      if (process.env.VERCEL) {
+        const tmpDbPath = path.join('/tmp', 'goodreads.db');
+        try {
+          if (!fs.existsSync(tmpDbPath) && fs.existsSync(localDbPath)) {
+            fs.copyFileSync(localDbPath, tmpDbPath);
+            dbPath = tmpDbPath;
+          } else if (fs.existsSync(tmpDbPath)) {
+            dbPath = tmpDbPath;
+          }
+        } catch (e) {
+          console.warn('Using fallback dbPath:', e.message);
+        }
+      }
+
+      const database = await open({
+        filename: dbPath,
+        driver: sqlite3.Database
+      });
+
+      // Ensure table exists
+      await database.exec(`
+        CREATE TABLE IF NOT EXISTS book (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          author TEXT NOT NULL,
+          price INTEGER NOT NULL,
+          pages INTEGER NOT NULL
+        );
+      `);
+
+      // Ensure seed data exists if table is empty
+      const count = await database.get('SELECT COUNT(*) AS total FROM book;');
+      if (count && count.total === 0) {
+        const initialBooks = [
+          [1, 'The Great Gatsby', 'F. Scott Fitzgerald', 450, 180],
+          [2, 'To Kill a Mockingbird', 'Harper Lee', 520, 281],
+          [3, '1984', 'George Orwell', 399, 328],
+          [4, 'Pride and Prejudice', 'Jane Austen', 350, 279],
+          [5, 'The Catcher in the Rye', 'J.D. Salinger', 420, 214],
+          [6, 'The Hobbit', 'J.R.R. Tolkien', 599, 310],
+          [7, 'Fahrenheit 451', 'Ray Bradbury', 380, 249],
+          [8, 'Brave New World', 'Aldous Huxley', 410, 268],
+          [9, 'Crime and Punishment', 'Fyodor Dostoevsky', 650, 671],
+          [10, 'The Alchemist', 'Paulo Coelho', 299, 208]
+        ];
+        for (const b of initialBooks) {
+          await database.run(
+            'INSERT INTO book (id, title, author, price, pages) VALUES (?, ?, ?, ?, ?);',
+            b
+          );
+        }
+      }
+
+      return database;
+    })();
+  }
+  db = await dbPromise;
+  return db;
+};
 
 /**
  * Task 3: initializeDBAndServer()
  * Asynchronous function that initializes the SQLite database connection
- * and only starts the Express server after the database is connected.
+ * and only starts the Express server after the database connection succeeds.
  */
 const initializeDBAndServer = async () => {
   try {
-    db = await open({
-      filename: dbPath,
-      driver: sqlite3.Database
-    });
+    await getDB();
 
-    app.listen(PORT, () => {
-      console.log(`=======================================================`);
-      console.log(`🚀 Server Running at: http://localhost:${PORT}/`);
-      console.log(`Connected to SQLite Database: ${dbPath}`);
-      console.log(`Available Endpoints:`);
-      console.log(`  - GET    /books/          (Fetch all books)`);
-      console.log(`  - GET    /books/:bookId/  (Fetch single book by ID)`);
-      console.log(`  - POST   /books/          (Add new book)`);
-      console.log(`  - PUT    /books/:bookId/  (Update book by ID)`);
-      console.log(`  - DELETE /books/:bookId/  (Remove book by ID)`);
-      console.log(`=======================================================`);
-    });
+    // Listen when running locally (not in Vercel serverless)
+    if (!process.env.VERCEL) {
+      app.listen(PORT, () => {
+        console.log(`=======================================================`);
+        console.log(`🚀 Server Running at: http://localhost:${PORT}/`);
+        console.log(`Connected to SQLite Database: ${dbPath}`);
+        console.log(`Available Endpoints:`);
+        console.log(`  - GET    /books/          (Fetch all books)`);
+        console.log(`  - GET    /books/:bookId/  (Fetch single book by ID)`);
+        console.log(`  - POST   /books/          (Add new book)`);
+        console.log(`  - PUT    /books/:bookId/  (Update book by ID)`);
+        console.log(`  - DELETE /books/:bookId/  (Remove book by ID)`);
+        console.log(`=======================================================`);
+      });
+    }
   } catch (error) {
     console.error(`Database Connection Error: ${error.message}`);
     process.exit(1);
@@ -76,6 +151,7 @@ initializeDBAndServer();
  */
 app.get('/books/', async (req, res) => {
   try {
+    const database = await getDB();
     const getBooksQuery = `
       SELECT
         id,
@@ -88,7 +164,7 @@ app.get('/books/', async (req, res) => {
       ORDER BY
         id ASC;
     `;
-    const booksArray = await db.all(getBooksQuery);
+    const booksArray = await database.all(getBooksQuery);
     res.status(200).json(booksArray);
   } catch (error) {
     console.error('Error in GET /books/:', error.message);
@@ -102,6 +178,7 @@ app.get('/books/', async (req, res) => {
  */
 app.get('/books/:bookId/', async (req, res) => {
   try {
+    const database = await getDB();
     const { bookId } = req.params;
     const getBookQuery = `
       SELECT
@@ -115,7 +192,7 @@ app.get('/books/:bookId/', async (req, res) => {
       WHERE
         id = ?;
     `;
-    const book = await db.get(getBookQuery, [bookId]);
+    const book = await database.get(getBookQuery, [bookId]);
 
     if (!book) {
       return res.status(404).json({ error: `Book with id ${bookId} not found` });
@@ -134,6 +211,7 @@ app.get('/books/:bookId/', async (req, res) => {
  */
 app.post('/books/', async (req, res) => {
   try {
+    const database = await getDB();
     const { title, author, price, pages } = req.body;
 
     if (!title || !author || price === undefined || pages === undefined) {
@@ -149,7 +227,7 @@ app.post('/books/', async (req, res) => {
         (?, ?, ?, ?);
     `;
 
-    const dbResponse = await db.run(addBookQuery, [title, author, price, pages]);
+    const dbResponse = await database.run(addBookQuery, [title, author, price, pages]);
     const bookId = dbResponse.lastID;
 
     res.status(201).json({
@@ -168,6 +246,7 @@ app.post('/books/', async (req, res) => {
  */
 app.put('/books/:bookId/', async (req, res) => {
   try {
+    const database = await getDB();
     const { bookId } = req.params;
     const { title, author, price, pages } = req.body;
 
@@ -189,7 +268,7 @@ app.put('/books/:bookId/', async (req, res) => {
         id = ?;
     `;
 
-    const dbResponse = await db.run(updateBookQuery, [title, author, price, pages, bookId]);
+    const dbResponse = await database.run(updateBookQuery, [title, author, price, pages, bookId]);
 
     if (dbResponse.changes === 0) {
       return res.status(404).json({ error: `Book with id ${bookId} not found` });
@@ -211,6 +290,7 @@ app.put('/books/:bookId/', async (req, res) => {
  */
 app.delete('/books/:bookId/', async (req, res) => {
   try {
+    const database = await getDB();
     const { bookId } = req.params;
     const deleteBookQuery = `
       DELETE FROM
@@ -219,7 +299,7 @@ app.delete('/books/:bookId/', async (req, res) => {
         id = ?;
     `;
 
-    const dbResponse = await db.run(deleteBookQuery, [bookId]);
+    const dbResponse = await database.run(deleteBookQuery, [bookId]);
 
     if (dbResponse.changes === 0) {
       return res.status(404).json({ error: `Book with id ${bookId} not found` });

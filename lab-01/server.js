@@ -61,14 +61,18 @@ app.use((req, res) => {
   });
 });
 
-// Task 4: Start Express server
-app.listen(PORT, () => {
-  console.log(`=======================================================`);
-  console.log(`🚀 Express server running on: http://localhost:${PORT}`);
-  console.log(`Available Endpoints:`);
-  console.log(`  - GET  /         (Welcome message)`);
-  console.log(`  - GET  /about    (Student details JSON)`);
-  console.log(`  - GET  /time     (Current server date & time JSON)`);
-  console.log(`  - ANY  /*        (404 fallback handler)`);
-  console.log(`=======================================================`);
-});
+// Task 4: Start Express server (listens locally; exported for Vercel)
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`=======================================================`);
+    console.log(`🚀 Express server running on: http://localhost:${PORT}`);
+    console.log(`Available Endpoints:`);
+    console.log(`  - GET  /         (Welcome message)`);
+    console.log(`  - GET  /about    (Student details JSON)`);
+    console.log(`  - GET  /time     (Current server date & time JSON)`);
+    console.log(`  - ANY  /*        (404 fallback handler)`);
+    console.log(`=======================================================`);
+  });
+}
+
+module.exports = app;

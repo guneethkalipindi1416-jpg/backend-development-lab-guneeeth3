@@ -10,7 +10,7 @@
 ---
 
 ## Live Link
-- **Deployment URL:** [https://lab-01-express-server.onrender.com](https://lab-01-express-server.onrender.com) *(Example production link on Render / Railway)*
+- **Deployment URL:** [https://lab-01-taupe.vercel.app](https://lab-01-taupe.vercel.app)
 - *(Note: If testing locally or offline, follow the "How to run" section below.)*
 
 ---
